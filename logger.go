@@ -1,53 +1,33 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 )
 
-type CommandError struct {
-	Command  string
-	ExitCode int
-	StdErr   string
-	Err      error
-}
-
-func (e *CommandError) Error() string {
-	if e.Err != nil {
-		return e.Err.Error()
-	}
-	return "command failed"
-}
-
 var logger *log.Logger
 
+// initLogger sets up a logger that writes to both stdout and a log file
+// placed next to the running executable.
 func initLogger() error {
-
-	executablePath, err := os.Executable()
+	execPath, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolving executable path: %w", err)
 	}
 
-	executableDir := filepath.Dir(executablePath)
+	logPath := filepath.Join(filepath.Dir(execPath), "reverb.log")
 
-	logPath := filepath.Join(executableDir, "app.log")
-
-	logFile, err := os.OpenFile(
-		logPath,
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
-		0644,
-	)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening log file %q: %w", logPath, err)
 	}
-
-	multiWriter := io.MultiWriter(os.Stdout, logFile)
 
 	logger = log.New(
-		multiWriter,
-		"[clipboard-tts] ",
+		io.MultiWriter(os.Stdout, logFile),
+		"[reverb] ",
 		log.Ldate|log.Ltime,
 	)
 
@@ -55,9 +35,16 @@ func initLogger() error {
 }
 
 func logInfo(format string, v ...any) {
+	if logger == nil {
+		return
+	}
 	logger.Printf("[INFO] "+format, v...)
 }
 
 func logError(format string, v ...any) {
+	if logger == nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", v...)
+		return
+	}
 	logger.Printf("[ERROR] "+format, v...)
 }

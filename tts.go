@@ -1,14 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strings"
 )
 
+// speak synthesises text using the TTS engine appropriate for the current OS.
 func speak(text string, config AppConfig) error {
 	switch runtime.GOOS {
 	case "darwin":
@@ -18,205 +17,183 @@ func speak(text string, config AppConfig) error {
 	case "windows":
 		return speakWindows(text, config)
 	default:
-		return fmt.Errorf("TTS non supportato su: %s", runtime.GOOS)
+		return fmt.Errorf("TTS not supported on: %s", runtime.GOOS)
 	}
 }
 
-func speakDarwin(text string, config AppConfig) error {
-	args := make([]string, 0)
+// ── macOS ─────────────────────────────────────────────────────────────────────
 
+func speakDarwin(text string, config AppConfig) error {
+	args := make([]string, 0, 4)
 	if config.Voice != "" {
 		args = append(args, "-v", config.Voice)
 	}
-
 	if config.Rate != "" {
 		args = append(args, "-r", config.Rate)
 	}
-
 	return runCommandWithInput(text, "say", args...)
 }
 
-func runCommandWithInput(input string, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	cmd.Stdin = strings.NewReader(input)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err == nil {
-		return nil
-	}
-
-	if name == "say" && strings.Contains(err.Error(), "signal: terminated") {
-		return nil
-	}
-
-	exitCode := -1
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		exitCode = exitErr.ExitCode()
-	}
-
-	return &CommandError{
-		Command:  name + " " + strings.Join(args, " ") + " <stdin>",
-		ExitCode: exitCode,
-		StdErr:   strings.TrimSpace(stderr.String()),
-		Err:      err,
-	}
-}
+// ── Linux ─────────────────────────────────────────────────────────────────────
 
 func speakLinux(text string, config AppConfig) error {
-	if config.PreferLinuxEngine == "espeak" && commandExists("espeak") {
+	prefer := config.PreferLinuxEngine
+
+	if prefer == "espeak" && commandExists("espeak") {
 		return speakWithEspeak(text, config)
 	}
-
 	if commandExists("spd-say") {
 		return speakWithSpdSay(text, config)
 	}
-
 	if commandExists("espeak") {
 		return speakWithEspeak(text, config)
 	}
 
-	return errors.New("nessun TTS locale trovato su Linux; installa speech-dispatcher/spd-say oppure espeak")
+	return errors.New("no TTS engine found on Linux; install speech-dispatcher (spd-say) or espeak")
 }
 
+// speakWithSpdSay uses stdin so that long or special-character texts are safe.
 func speakWithSpdSay(text string, config AppConfig) error {
-	args := make([]string, 0)
-
+	args := make([]string, 0, 6)
 	if config.Rate != "" {
 		args = append(args, "--rate", config.Rate)
 	}
-
 	if config.Pitch != "" {
 		args = append(args, "--pitch", config.Pitch)
 	}
-
-	args = append(args, text)
-	return runCommand("spd-say", args...)
+	// Pass text via stdin with -e (read from stdin) to avoid shell-quoting issues.
+	args = append(args, "-e")
+	return runCommandWithInput(text, "spd-say", args...)
 }
 
 func speakWithEspeak(text string, config AppConfig) error {
-	args := make([]string, 0)
-
+	args := make([]string, 0, 8)
 	if config.Voice != "" {
 		args = append(args, "-v", config.Voice)
 	}
-
 	if config.Rate != "" {
 		args = append(args, "-s", config.Rate)
 	}
-
 	if config.Pitch != "" {
 		args = append(args, "-p", config.Pitch)
 	}
-
-	args = append(args, text)
-	return runCommand("espeak", args...)
+	// Pass text via stdin using the "pipe" flag to avoid shell-quoting issues.
+	args = append(args, "--stdin")
+	return runCommandWithInput(text, "espeak", args...)
 }
+
+// ── Windows ───────────────────────────────────────────────────────────────────
 
 func speakWindows(text string, config AppConfig) error {
-	script := `
-Add-Type -AssemblyName System.Speech;
-$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;
-$synth.SetOutputToDefaultAudioDevice();
-`
+	var sb strings.Builder
+	sb.WriteString("Add-Type -AssemblyName System.Speech;\n")
+	sb.WriteString("$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;\n")
+	sb.WriteString("$synth.SetOutputToDefaultAudioDevice();\n")
 
 	if config.Voice != "" {
-		script += fmt.Sprintf("$synth.SelectVoice(%s);\n", powershellQuote(config.Voice))
+		fmt.Fprintf(&sb, "$synth.SelectVoice(%s);\n", powershellEscape(config.Voice))
 	}
-
 	if config.Rate != "" {
-		script += fmt.Sprintf("$synth.Rate = [int](%s);\n", powershellQuote(config.Rate))
+		fmt.Fprintf(&sb, "$synth.Rate = [int](%s);\n", powershellEscape(config.Rate))
 	}
 
-	script += fmt.Sprintf("$synth.Speak(%s);\n", powershellQuote(text))
+	fmt.Fprintf(&sb, "$synth.Speak(%s);\n", powershellEscape(text))
 
-	return runCommand("powershell", "-NoProfile", "-Command", script)
+	return runCommand("powershell", "-NoProfile", "-Command", sb.String())
 }
 
+// ── Stop ──────────────────────────────────────────────────────────────────────
+
+// stopSpeaking interrupts any ongoing TTS playback.
 func stopSpeaking() error {
 	switch runtime.GOOS {
 	case "darwin":
-		return stopDarwinSpeaking()
+		return stopDarwin()
 	case "linux":
-		if commandExists("spd-say") {
-			return runCommand("spd-say", "--cancel")
-		}
-		if commandExists("pkill") {
-			_ = runCommand("pkill", "espeak")
-			return nil
-		}
-		return errors.New("stop non supportato: installa spd-say o pkill")
+		return stopLinux()
 	case "windows":
-		return errors.New("stop non implementato su Windows per System.Speech")
+		return stopWindows()
 	default:
-		return fmt.Errorf("sistema operativo non supportato: %s", runtime.GOOS)
+		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
 }
 
-func stopDarwinSpeaking() error {
+func stopDarwin() error {
 	err := runCommand("killall", "say")
 	if err == nil {
 		logInfo("speaker stopped")
 		return nil
 	}
-
-	if commandErr, ok := err.(*CommandError); ok {
-		if commandErr.ExitCode == 1 &&
-			strings.Contains(commandErr.StdErr, "No matching processes") {
-			logInfo("speaker already stopped")
+	if cmdErr, ok := err.(*CommandError); ok {
+		if cmdErr.ExitCode == 1 && strings.Contains(cmdErr.Stderr, "No matching processes") {
+			logInfo("speaker was already stopped")
 			return nil
 		}
 	}
-
 	return err
 }
 
-func listVoicesForCurrentOS(config AppConfig) error {
+func stopLinux() error {
+	if commandExists("spd-say") {
+		return runCommand("spd-say", "--cancel")
+	}
+	if commandExists("pkill") {
+		_ = runCommand("pkill", "espeak")
+		return nil
+	}
+	return errors.New("stop not supported; install spd-say or ensure pkill is available")
+}
+
+func stopWindows() error {
+	// There is no clean way to stop a synchronous System.Speech.Speak call
+	// from outside the process. Kill the powershell subprocess instead.
+	err := runCommand("taskkill", "/F", "/IM", "powershell.exe")
+	if err == nil {
+		logInfo("speaker stopped (powershell terminated)")
+		return nil
+	}
+	// If no powershell is running, taskkill exits 128 — treat as success.
+	if cmdErr, ok := err.(*CommandError); ok && cmdErr.ExitCode == 128 {
+		logInfo("speaker was already stopped")
+		return nil
+	}
+	return err
+}
+
+// ── List voices ───────────────────────────────────────────────────────────────
+
+// listVoices prints the available TTS voices for the current OS.
+func listVoices(config AppConfig) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return listDarwinVoices()
+		return runCommand("say", "-v", "?")
 	case "linux":
 		return listLinuxVoices(config)
 	case "windows":
 		return listWindowsVoices()
 	default:
-		return fmt.Errorf("sistema operativo non supportato: %s", runtime.GOOS)
+		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
-}
-
-func listDarwinVoices() error {
-	return runCommand("say", "-v", "?")
 }
 
 func listLinuxVoices(config AppConfig) error {
 	if config.PreferLinuxEngine == "espeak" && commandExists("espeak") {
 		return runCommand("espeak", "--voices")
 	}
-
 	if commandExists("spd-say") {
-		fmt.Println("speech-dispatcher/spd-say non espone sempre una lista voci semplice.")
-		fmt.Println("Provo a mostrare i moduli disponibili:")
-		_ = runCommand("spd-say", "--help")
-
+		fmt.Println("speech-dispatcher does not expose a simple voice list.")
+		fmt.Println("Showing available output modules instead:")
+		_ = runCommand("spd-say", "--list-output-modules")
 		if commandExists("espeak") {
-			fmt.Println()
-			fmt.Println("Voci disponibili tramite espeak:")
+			fmt.Println("\nVoices available via espeak:")
 			return runCommand("espeak", "--voices")
 		}
-
 		return nil
 	}
-
 	if commandExists("espeak") {
 		return runCommand("espeak", "--voices")
 	}
-
-	return errors.New("nessun motore TTS trovato: installa speech-dispatcher/spd-say oppure espeak")
+	return errors.New("no TTS engine found; install speech-dispatcher (spd-say) or espeak")
 }
 
 func listWindowsVoices() error {
@@ -224,10 +201,9 @@ func listWindowsVoices() error {
 Add-Type -AssemblyName System.Speech;
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;
 $synth.GetInstalledVoices() | ForEach-Object {
-    $info = $_.VoiceInfo;
-    Write-Output ($info.Name + " | " + $info.Culture + " | " + $info.Gender + " | " + $info.Age);
+    $v = $_.VoiceInfo;
+    Write-Output ("{0,-30} | {1,-10} | {2,-6} | {3}" -f $v.Name, $v.Culture, $v.Gender, $v.Age);
 }
 `
-
 	return runCommand("powershell", "-NoProfile", "-Command", script)
 }

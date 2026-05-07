@@ -1,4 +1,4 @@
-module clipboard-tts
+module reverb
 
 go 1.26
 

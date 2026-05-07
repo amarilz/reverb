@@ -1,47 +1,48 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
-	"unicode/utf8"
-
-	"golang.org/x/text/encoding/charmap"
 )
 
 func main() {
+	// Logger must be initialised first; subsequent helpers rely on it.
 	if err := initLogger(); err != nil {
-		exitWithError(err)
+		// Logger is not yet available — write directly to stderr.
+		fmt.Fprintf(os.Stderr, "error: initialising logger: %v\n", err)
+		os.Exit(1)
 	}
 
-	configPath := flag.String("config", "config.json", "percorso del file di configurazione")
-	stop := flag.Bool("stop", false, "interrompe la lettura in corso, dove supportato")
-	listVoices := flag.Bool("list-voices", false, "stampa le voci disponibili")
-	test := flag.Bool("test", false, "esegue un test TTS usando il testo di configurazione")
-	initConfig := flag.Bool("init-config", false, "crea un file config.json di esempio")
+	// ── Flags ─────────────────────────────────────────────────────────────────
+	configPath := flag.String("config", "config.json", "path to the configuration file")
+	doStop := flag.Bool("stop", false, "stop ongoing speech (where supported)")
+	doListVoices := flag.Bool("list-voices", false, "print available voices and exit")
+	doTest := flag.Bool("test", false, "speak the test_text from config and exit")
+	doInitConfig := flag.Bool("init-config", false, "write a default config.json and exit")
 
-	overrideVoice := flag.String("voice", "", "override temporaneo della voce")
-	overrideRate := flag.String("rate", "", "override temporaneo della velocità")
-	overridePitch := flag.String("pitch", "", "override temporaneo del pitch")
-	overrideText := flag.String("text", "", "testo da usare con --test")
+	overrideVoice := flag.String("voice", "", "override voice for this run")
+	overrideRate := flag.String("rate", "", "override speaking rate for this run")
+	overridePitch := flag.String("pitch", "", "override pitch for this run")
+	overrideText := flag.String("text", "", "override test_text when used with --test")
 
 	flag.Parse()
 
-	if *initConfig {
+	// ── init-config ───────────────────────────────────────────────────────────
+	if *doInitConfig {
 		if err := CreateDefaultConfig(*configPath); err != nil {
 			exitWithError(err)
 		}
-		fmt.Println("Configurazione creata:", *configPath)
+		fmt.Println("Default configuration written to:", *configPath)
 		return
 	}
 
+	// ── Load & patch config ───────────────────────────────────────────────────
 	config, err := LoadConfig(*configPath)
 	if err != nil {
-		exitWithError(fmt.Errorf("error on loading the configuration: %w", err))
+		exitWithError(fmt.Errorf("loading configuration: %w", err))
 	}
 
 	if *overrideVoice != "" {
@@ -57,153 +58,66 @@ func main() {
 		config.TestText = *overrideText
 	}
 
-	if *listVoices {
-		logInfo("list-voices")
-		if err := listVoicesForCurrentOS(config); err != nil {
+	// ── Subcommands ───────────────────────────────────────────────────────────
+	if *doListVoices {
+		logInfo("listing voices")
+		if err := listVoices(config); err != nil {
 			exitWithError(err)
 		}
 		return
 	}
 
-	if *stop {
+	if *doStop {
+		logInfo("stopping speaker")
 		if err := stopSpeaking(); err != nil {
 			exitWithError(err)
 		}
 		return
 	}
 
-	if *test {
-		logInfo("testing speaker")
+	if *doTest {
+		logInfo("running TTS test")
 		if err := speak(config.TestText, config); err != nil {
 			exitWithError(err)
 		}
 		return
 	}
 
+	// ── Main path: read clipboard and speak ───────────────────────────────────
+	mainPath(err, config)
+}
+
+func mainPath(err error, config AppConfig) {
 	text, err := readClipboard()
 	if err != nil {
 		exitWithError(err)
 	}
+
 	text = normalizeText(text)
 	if text == "" {
-		exitWithError(errors.New("clipboard empty or with unreadable text"))
+		exitWithError(errors.New("clipboard is empty or contains unreadable text"))
 	}
+
 	wordCount := len(strings.Fields(text))
-	logInfo("starting speaker (characters: %d, words: %d)", len(text), wordCount)
+	logInfo("speaking (chars: %d, words: %d)", len(text), wordCount)
+
 	if err := speak(text, config); err != nil {
 		exitWithError(err)
 	}
 }
 
-func normalizeText(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	text = strings.TrimSpace(text)
-	text = ensureUTF8(text)
-	return text
-}
-
-func ensureUTF8(text string) string {
-	text = strings.TrimSpace(text)
-
-	if utf8.ValidString(text) {
-		return text
-	}
-	if decoded, err := charmap.Windows1252.NewDecoder().String(text); err == nil && utf8.ValidString(decoded) {
-		return strings.TrimSpace(decoded)
-	}
-	if decoded, err := charmap.Macintosh.NewDecoder().String(text); err == nil && utf8.ValidString(decoded) {
-		return strings.TrimSpace(decoded)
-	}
-
-	logError("clipboard contains invalid UTF-8; replacing invalid bytes")
-	return strings.ToValidUTF8(text, "")
-}
-
-func commandOutputWithEnv(env []string, name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Env = append(os.Environ(), env...)
-
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	return string(output), nil
-}
-
-func commandOutput(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	output, err := cmd.Output()
-	if err != nil {
-		logError("error executing command: %s %s", name, strings.Join(args, " "))
-		return "", err
-	}
-	return string(output), nil
-}
-
-func runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err == nil {
-		return nil
-	}
-
-	exitCode := -1
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		exitCode = exitErr.ExitCode()
-	}
-
-	return &CommandError{
-		Command:  name + " " + strings.Join(args, " "),
-		ExitCode: exitCode,
-		StdErr:   strings.TrimSpace(stderr.String()),
-		Err:      err,
-	}
-}
-
-func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
-
-func powershellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-}
-
+// exitWithError logs err with full detail and terminates with exit code 1.
 func exitWithError(err error) {
-
-	if logger != nil {
-
-		if commandErr, ok := err.(*CommandError); ok {
-			if commandErr.StdErr != "" {
-				logError(
-					"exitCode=%d stderr=%q command=%s",
-					commandErr.ExitCode,
-					commandErr.StdErr,
-					commandErr.Command,
-				)
-			} else {
-				logError(
-					"exitCode=%d err=%v command=%s",
-					commandErr.ExitCode,
-					commandErr.Err,
-					commandErr.Command,
-				)
-			}
+	if cmdErr, ok := err.(*CommandError); ok {
+		if cmdErr.Stderr != "" {
+			logError("exit_code=%d stderr=%q command=%s", cmdErr.ExitCode, cmdErr.Stderr, cmdErr.Command)
 		} else {
-			logError("%v", err)
+			logError("exit_code=%d err=%v command=%s", cmdErr.ExitCode, cmdErr.Err, cmdErr.Command)
 		}
+	} else {
+		logError("%v", err)
 	}
 
-	_, _ = fmt.Fprintln(os.Stderr, "Errore:", err)
-
+	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
 }
