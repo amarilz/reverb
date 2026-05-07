@@ -39,31 +39,61 @@ func speakDarwin(text string, config AppConfig) error {
 func speakLinux(text string, config AppConfig) error {
 	prefer := config.PreferLinuxEngine
 
+	if prefer == "espeak-ng" && commandExists("espeak-ng") {
+		return speakWithEspeakNG(text, config)
+	}
 	if prefer == "espeak" && commandExists("espeak") {
+		return speakWithEspeak(text, config)
+	}
+	if prefer == "spd-say" && commandExists("spd-say") {
+		return speakWithSpdSay(text, config)
+	}
+
+	if commandExists("espeak-ng") {
+		return speakWithEspeakNG(text, config)
+	}
+	if commandExists("espeak") {
 		return speakWithEspeak(text, config)
 	}
 	if commandExists("spd-say") {
 		return speakWithSpdSay(text, config)
 	}
-	if commandExists("espeak") {
-		return speakWithEspeak(text, config)
-	}
 
-	return errors.New("no TTS engine found on Linux; install speech-dispatcher (spd-say) or espeak")
+	return errors.New("no TTS engine found on Linux; install espeak-ng, espeak or speech-dispatcher")
 }
 
-// speakWithSpdSay uses stdin so that long or special-character texts are safe.
-func speakWithSpdSay(text string, config AppConfig) error {
-	args := make([]string, 0, 6)
+func speakWithEspeakNG(text string, config AppConfig) error {
+	args := make([]string, 0, 8)
+
+	if config.Voice != "" {
+		args = append(args, "-v", config.Voice)
+	}
 	if config.Rate != "" {
-		args = append(args, "--rate", config.Rate)
+		args = append(args, "-s", config.Rate)
 	}
 	if config.Pitch != "" {
-		args = append(args, "--pitch", config.Pitch)
+		args = append(args, "-p", config.Pitch)
 	}
-	// Pass text via stdin with -e (read from stdin) to avoid shell-quoting issues.
-	args = append(args, "-e")
-	return runCommandWithInput(text, "spd-say", args...)
+
+	args = append(args, "--stdin")
+
+	err := runCommandWithInput(text, "espeak-ng", args...)
+	if err == nil {
+		return nil
+	}
+
+	if cmdErr, ok := err.(*CommandError); ok {
+		if strings.Contains(cmdErr.Stderr, "Please install necessary MBROLA voice") ||
+			strings.Contains(cmdErr.Stderr, "Could not load the specified mbrola voice file") {
+			return fmt.Errorf(
+				"MBROLA voice %q is not installed or cannot be loaded; install the corresponding package, for example: sudo apt install mbrola-%s",
+				config.Voice,
+				strings.TrimPrefix(config.Voice, "mb-"),
+			)
+		}
+	}
+
+	return err
 }
 
 func speakWithEspeak(text string, config AppConfig) error {
@@ -80,6 +110,19 @@ func speakWithEspeak(text string, config AppConfig) error {
 	// Pass text via stdin using the "pipe" flag to avoid shell-quoting issues.
 	args = append(args, "--stdin")
 	return runCommandWithInput(text, "espeak", args...)
+}
+
+// speakWithSpdSay uses stdin so that long or special-character texts are safe.
+func speakWithSpdSay(text string, config AppConfig) error {
+	args := make([]string, 0, 6)
+	if config.Rate != "" {
+		args = append(args, "--rate", config.Rate)
+	}
+	if config.Pitch != "" {
+		args = append(args, "--pitch", config.Pitch)
+	}
+	args = append(args, "-e")
+	return runCommandWithInput(text, "spd-say", args...)
 }
 
 // ── Windows ───────────────────────────────────────────────────────────────────
@@ -134,25 +177,31 @@ func stopDarwin() error {
 }
 
 func stopLinux() error {
+	stopped := false
+
 	if commandExists("spd-say") {
-		return runCommand("spd-say", "--cancel")
+		_ = runCommand("spd-say", "--cancel")
+		stopped = true
 	}
 	if commandExists("pkill") {
+		_ = runCommand("pkill", "espeak-ng")
 		_ = runCommand("pkill", "espeak")
+		stopped = true
+	}
+
+	if stopped {
+		logInfo("speaker stopped")
 		return nil
 	}
 	return errors.New("stop not supported; install spd-say or ensure pkill is available")
 }
 
 func stopWindows() error {
-	// There is no clean way to stop a synchronous System.Speech.Speak call
-	// from outside the process. Kill the powershell subprocess instead.
 	err := runCommand("taskkill", "/F", "/IM", "powershell.exe")
 	if err == nil {
 		logInfo("speaker stopped (powershell terminated)")
 		return nil
 	}
-	// If no powershell is running, taskkill exits 128 — treat as success.
 	if cmdErr, ok := err.(*CommandError); ok && cmdErr.ExitCode == 128 {
 		logInfo("speaker was already stopped")
 		return nil
@@ -177,23 +226,36 @@ func listVoices(config AppConfig) error {
 }
 
 func listLinuxVoices(config AppConfig) error {
-	if config.PreferLinuxEngine == "espeak" && commandExists("espeak") {
+	prefer := config.PreferLinuxEngine
+
+	if prefer == "espeak-ng" && commandExists("espeak-ng") {
+		return runCommand("espeak-ng", "--voices")
+	}
+	if prefer == "espeak" && commandExists("espeak") {
 		return runCommand("espeak", "--voices")
 	}
-	if commandExists("spd-say") {
-		fmt.Println("speech-dispatcher does not expose a simple voice list.")
-		fmt.Println("Showing available output modules instead:")
-		_ = runCommand("spd-say", "--list-output-modules")
-		if commandExists("espeak") {
-			fmt.Println("\nVoices available via espeak:")
-			return runCommand("espeak", "--voices")
-		}
-		return nil
+	if prefer == "spd-say" && commandExists("spd-say") {
+		return listSpeechDispatcherVoices()
+	}
+
+	if commandExists("espeak-ng") {
+		return runCommand("espeak-ng", "--voices")
 	}
 	if commandExists("espeak") {
 		return runCommand("espeak", "--voices")
 	}
-	return errors.New("no TTS engine found; install speech-dispatcher (spd-say) or espeak")
+	if commandExists("spd-say") {
+		return listSpeechDispatcherVoices()
+	}
+
+	return errors.New("no TTS engine found; install espeak-ng, espeak or speech-dispatcher")
+}
+
+func listSpeechDispatcherVoices() error {
+	fmt.Println("speech-dispatcher does not expose a simple voice list.")
+	fmt.Println("Showing available output modules instead:")
+
+	return runCommand("spd-say", "--list-output-modules")
 }
 
 func listWindowsVoices() error {
