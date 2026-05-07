@@ -1,0 +1,6 @@
+{
+  "voice": "Alice",
+  "rate": "550",
+  "pitch": "",
+  "prefer_linux_engine": "spd-say"
+}
