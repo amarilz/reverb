@@ -1,13 +1,15 @@
 BINARY      := reverb
 MODULE      := github.com/amarilz/reverb
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-BUILD_FLAGS := -trimpath -ldflags "-s -w -X main.version=$(VERSION)"
+BUILD_FLAGS := -trimpath -ldflags "-s -w -X reverb/internal/app.Version=$(VERSION)"
+
+CMD := ./cmd/reverb
 
 # ── Development ───────────────────────────────────────────────────────────────
 
 .PHONY: build
 build:
-	go build $(BUILD_FLAGS) -o $(BINARY) .
+	go build $(BUILD_FLAGS) -o $(BINARY) $(CMD)
 
 .PHONY: run
 run: build
@@ -33,7 +35,7 @@ tidy:
 
 .PHONY: install
 install:
-	go install $(BUILD_FLAGS) .
+	go install $(BUILD_FLAGS) $(CMD)
 
 # ── Cross-platform release builds ─────────────────────────────────────────────
 
@@ -41,11 +43,15 @@ DIST := dist
 
 .PHONY: release
 release: clean
-	GOOS=darwin  GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-darwin-amd64  .
-	GOOS=darwin  GOARCH=arm64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-darwin-arm64  .
-	GOOS=linux   GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-linux-amd64   .
-	GOOS=linux   GOARCH=arm64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-linux-arm64   .
-	GOOS=windows GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-windows-amd64.exe .
+	mkdir -p $(DIST)
+
+	GOOS=darwin  GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-darwin-amd64       $(CMD)
+	GOOS=darwin  GOARCH=arm64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-darwin-arm64       $(CMD)
+
+	GOOS=linux   GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-linux-amd64        $(CMD)
+	GOOS=linux   GOARCH=arm64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-linux-arm64        $(CMD)
+
+	GOOS=windows GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-windows-amd64.exe  $(CMD)
 
 .PHONY: clean
 clean:
