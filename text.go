@@ -36,3 +36,29 @@ func ensureUTF8(text string) string {
 	logError("clipboard contains invalid UTF-8; replacing invalid bytes with U+FFFD")
 	return strings.ToValidUTF8(text, "\uFFFD")
 }
+
+// stripMarkdownCodeBlocks removes fenced Markdown code blocks delimited by ```.
+// It also supports fences with language names, such as ```go.
+func stripMarkdownCodeBlocks(text string) string {
+	lines := strings.Split(text, "\n")
+
+	var out []string
+	inCodeBlock := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "```") {
+			inCodeBlock = !inCodeBlock
+			continue
+		}
+
+		if inCodeBlock {
+			continue
+		}
+
+		out = append(out, line)
+	}
+
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}

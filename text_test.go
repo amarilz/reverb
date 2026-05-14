@@ -35,3 +35,52 @@ func TestEnsureUTF8_ValidInput(t *testing.T) {
 		t.Errorf("ensureUTF8 mangled valid UTF-8: got %q", got)
 	}
 }
+
+func TestStripMarkdownCodeBlocks(t *testing.T) {
+	input := `Intro text.
+
+` + "```go" + `
+fmt.Println("hello")
+` + "```" + `
+
+Outro text.`
+
+	want := `Intro text.
+
+
+Outro text.`
+
+	got := stripMarkdownCodeBlocks(input)
+	if got != want {
+		t.Errorf("stripMarkdownCodeBlocks() = %q; want %q", got, want)
+	}
+}
+
+func TestStripMarkdownCodeBlocks_MultipleBlocks(t *testing.T) {
+	input := `Before
+
+` + "```" + `
+code one
+` + "```" + `
+
+Middle
+
+` + "```js" + `
+console.log("two")
+` + "```" + `
+
+After`
+
+	want := `Before
+
+
+Middle
+
+
+After`
+
+	got := stripMarkdownCodeBlocks(input)
+	if got != want {
+		t.Errorf("stripMarkdownCodeBlocks() = %q; want %q", got, want)
+	}
+}

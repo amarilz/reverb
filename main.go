@@ -22,6 +22,7 @@ func main() {
 	doListVoices := flag.Bool("list-voices", false, "print available voices and exit")
 	doTest := flag.Bool("test", false, "speak the test_text from config and exit")
 	doInitConfig := flag.Bool("init-config", false, "write a default config.json and exit")
+	skipCode := flag.Bool("skip-code", false, "skip fenced Markdown code blocks before speaking")
 
 	overrideVoice := flag.String("voice", "", "override voice for this run")
 	overrideRate := flag.String("rate", "", "override speaking rate for this run")
@@ -84,16 +85,22 @@ func main() {
 	}
 
 	// ── Main path: read clipboard and speak ───────────────────────────────────
-	mainPath(err, config)
+	mainPath(err, config, *skipCode)
 }
 
-func mainPath(err error, config AppConfig) {
+func mainPath(err error, config AppConfig, skipCode bool) {
 	text, err := readClipboard()
 	if err != nil {
 		exitWithError(err)
 	}
 
 	text = normalizeText(text)
+
+	if skipCode {
+		text = stripMarkdownCodeBlocks(text)
+		text = normalizeText(text)
+	}
+
 	if text == "" {
 		exitWithError(errors.New("clipboard is empty or contains unreadable text"))
 	}
