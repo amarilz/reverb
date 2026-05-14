@@ -13,12 +13,12 @@ var logger *log.Logger
 // initLogger sets up a logger that writes to both stdout and a log file
 // placed next to the running executable.
 func initLogger() error {
-	execPath, err := os.Executable()
+	execDir, err := executableDir()
 	if err != nil {
-		return fmt.Errorf("resolving executable path: %w", err)
+		return err
 	}
 
-	logPath := filepath.Join(filepath.Dir(execPath), "reverb.log")
+	logPath := filepath.Join(execDir, "reverb.log")
 
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {

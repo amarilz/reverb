@@ -23,6 +23,7 @@ func main() {
 	doTest := flag.Bool("test", false, "speak the test_text from config and exit")
 	doInitConfig := flag.Bool("init-config", false, "write a default config.json and exit")
 	skipCode := flag.Bool("skip-code", false, "skip fenced Markdown code blocks before speaking")
+	doQueue := flag.Bool("queue", false, "queue speech if another reverb instance is already speaking")
 
 	overrideVoice := flag.String("voice", "", "override voice for this run")
 	overrideRate := flag.String("rate", "", "override speaking rate for this run")
@@ -85,10 +86,10 @@ func main() {
 	}
 
 	// ── Main path: read clipboard and speak ───────────────────────────────────
-	mainPath(err, config, *skipCode)
+	mainPath(err, config, *skipCode, *doQueue)
 }
 
-func mainPath(err error, config AppConfig, skipCode bool) {
+func mainPath(err error, config AppConfig, skipCode bool, queue bool) {
 	text, err := readClipboard()
 	if err != nil {
 		exitWithError(err)
@@ -103,6 +104,13 @@ func mainPath(err error, config AppConfig, skipCode bool) {
 
 	if text == "" {
 		exitWithError(errors.New("clipboard is empty or contains unreadable text"))
+	}
+
+	if queue {
+		if err := enqueueAndDrain(text, config); err != nil {
+			exitWithError(err)
+		}
+		return
 	}
 
 	wordCount := len(strings.Fields(text))
