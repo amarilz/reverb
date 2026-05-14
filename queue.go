@@ -207,3 +207,38 @@ func nextSpeechJob() (string, bool, error) {
 	sort.Strings(jobs)
 	return jobs[0], true, nil
 }
+
+func clearSpeechQueue() error {
+	jobsDir, err := queueJobsDir()
+	if err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(jobsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reading queue directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".txt") {
+			continue
+		}
+
+		jobPath := filepath.Join(jobsDir, name)
+
+		if err := os.Remove(jobPath); err != nil {
+			return fmt.Errorf("removing queued speech job %q: %w", jobPath, err)
+		}
+	}
+
+	logInfo("speech queue cleared")
+	return nil
+}

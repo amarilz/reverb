@@ -70,7 +70,12 @@ func main() {
 	}
 
 	if *doStop {
-		logInfo("stopping speaker")
+		logInfo("stopping speaker and clearing queue")
+
+		if err := clearSpeechQueue(); err != nil {
+			exitWithError(err)
+		}
+
 		if err := stopSpeaking(); err != nil {
 			exitWithError(err)
 		}
