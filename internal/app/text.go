@@ -13,7 +13,9 @@ func normalizeText(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = strings.TrimSpace(text)
-	return ensureUTF8(text)
+	text = ensureUTF8(text)
+	text = cleanMarkdownLinks(text)
+	return strings.TrimSpace(text)
 }
 
 // ensureUTF8 returns text unchanged when it is already valid UTF-8.
@@ -61,4 +63,42 @@ func stripMarkdownCodeBlocks(text string) string {
 	}
 
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func cleanMarkdownLinks(text string) string {
+	var b strings.Builder
+	b.Grow(len(text))
+
+	for i := 0; i < len(text); i++ {
+		if text[i] != '[' {
+			b.WriteByte(text[i])
+			continue
+		}
+
+		labelStart := i + 1
+		labelEnd := strings.IndexByte(text[labelStart:], ']')
+		if labelEnd < 0 {
+			b.WriteByte(text[i])
+			continue
+		}
+		labelEnd += labelStart
+
+		if labelEnd+1 >= len(text) || text[labelEnd+1] != '(' {
+			b.WriteByte(text[i])
+			continue
+		}
+
+		urlStart := labelEnd + 2
+		urlEnd := strings.IndexByte(text[urlStart:], ')')
+		if urlEnd < 0 {
+			b.WriteByte(text[i])
+			continue
+		}
+		urlEnd += urlStart
+
+		b.WriteString(text[labelStart:labelEnd])
+		i = urlEnd
+	}
+
+	return strings.TrimSpace(b.String())
 }
