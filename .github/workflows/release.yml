@@ -29,6 +29,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Read version and check release
         id: version
         env:
@@ -41,6 +44,13 @@ jobs:
 
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid semantic version: $VERSION" >&2
+            exit 1
+          fi
+
+          PACKAGE_VERSION="$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "reverb") | .version')"
+          if [[ "$PACKAGE_VERSION" != "$VERSION" ]]; then
+            echo "Cargo.toml version ($PACKAGE_VERSION) must match VERSION ($VERSION)." >&2
             exit 1
           fi
 

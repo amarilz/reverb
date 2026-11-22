@@ -71,9 +71,9 @@ into `dist/`. To build for another platform, use `make release-<rust-target>`;
 `make release-all` builds all five targets when their Rust targets, linkers and
 SDKs are configured.
 
-The root `VERSION` file sets the version printed by `reverb --version` and used
-for GitHub Releases. To publish a release, update `VERSION` (for example, to
-`1.1.1`). Push the version bump to `main` or run the
+Edit the root `VERSION` file and run `make sync-version`. This updates the Cargo
+package version in `Cargo.toml` and `Cargo.lock`. Commit all three files so Cargo,
+`reverb --version` and GitHub Releases report the same version. Push to `main` or run the
 Release workflow manually from `main`. GitHub Actions tests and packages each
 target, creates the corresponding `v<version>` tag, and publishes the archives
 with release notes generated from Conventional Commits. Published versions are
@@ -83,7 +83,9 @@ skipped.
 
 ##### Configuration
 
-The default configuration path is `config.json` in the current working directory. Existing JSON configurations work with the Rust release. Generate a default config:
+Reverb uses built-in defaults. Set the voice and rate with `--voice` and `--rate`,
+or load a JSON file explicitly with `--config <path>`. To create a sample
+`config.json` in the current directory, run:
 
 ```bash
 reverb --init-config
@@ -142,13 +144,14 @@ triggering the tool through keyboard shortcuts while reading articles or documen
 Example:
 
 ```bash
-reverb --queue --skip-code --config config.json
+reverb --queue --skip-code --voice Alice --rate 620
 ```
 
-Queued requests are played one at a time in FIFO order, using the configuration
-of the invocation that drains the queue. Queue files and `reverb.log` live next
-to the executable. Leave that directory writable to use the queue and playback
-controls.
+Queued requests play one at a time in FIFO order, each with the settings it was
+submitted with. Reverb stores pending jobs and playback control files in the user
+state directory, independent of the installed binary. On macOS this is
+`~/Library/Application Support/reverb`. Regular playback is silent on the command
+line. Errors go to standard error.
 
 ---
 
@@ -178,15 +181,16 @@ Inline code using single backticks is preserved.
 
 ### Personal macOS Workflow
 
-`reverb` is mainly designed around a keyboard-driven workflow on macOS. I personally use two [Hammerspoon](https://github.com/hammerspoon/hammerspoon) shortcuts:
+`reverb` is mainly designed around a keyboard-driven workflow on macOS. I personally use three [Hammerspoon](https://github.com/hammerspoon/hammerspoon) shortcuts:
 
 ##### Start TTS
 
 ```bash
-reverb --queue --skip-code --config configPath
+reverb --queue --skip-code --voice Alice --rate 620
+reverb --queue --skip-code --voice Samantha --rate 450
 ```
 
-This shortcut also automatically copies (via Hammerspoon Lua script) the currently selected text into the clipboard before launching `reverb`.
+Each shortcut copies the selection before launching Reverb. After a standard Cargo installation, use `~/.cargo/bin/reverb` as the executable path in Hammerspoon.
 
 Typical workflow:
 

@@ -9,7 +9,7 @@ release_x86_64-unknown-linux-gnu := linux-amd64
 release_aarch64-unknown-linux-gnu := linux-arm64
 release_x86_64-pc-windows-msvc := windows-amd64.exe
 
-.PHONY: build run test vet lint tidy install clean release release-all help
+.PHONY: build run test vet lint tidy sync-version install clean release release-all help
 build:
 	cargo build --locked --release
 
@@ -29,6 +29,19 @@ lint:
 tidy:
 	cargo generate-lockfile
 
+sync-version:
+	@set -eu; \
+	version=$$(cat VERSION); \
+	if ! printf '%s\n' "$$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$'; then \
+		printf '%s\n' 'VERSION must contain a semantic version.' >&2; \
+		exit 1; \
+	fi; \
+	tmp=$$(mktemp Cargo.toml.XXXXXX); \
+	trap 'rm -f "$$tmp"' EXIT; \
+	sed "s/^version = \"[^\"]*\"$$/version = \"$$version\"/" Cargo.toml > "$$tmp"; \
+	if ! cmp -s Cargo.toml "$$tmp"; then chmod 644 "$$tmp" && mv "$$tmp" Cargo.toml; fi; \
+	cargo update --workspace
+
 install:
 	cargo install --locked --path . --force
 
@@ -47,5 +60,5 @@ clean:
 	rm -rf dist
 
 help:
-	@echo 'build run test vet lint tidy install clean'
+	@echo 'build run test vet lint tidy sync-version install clean'
 	@echo 'release (current platform), release-<rust-target>, release-all'

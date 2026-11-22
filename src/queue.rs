@@ -1,5 +1,6 @@
-use crate::{config::Config, log, log_speech, platform, text};
+use crate::{config::Config, platform, text};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -8,6 +9,12 @@ use tempfile::NamedTempFile;
 pub struct Queue {
     root: PathBuf,
     jobs: PathBuf,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Job<T, C> {
+    text: T,
+    config: C,
 }
 
 pub struct Generation {
@@ -30,11 +37,20 @@ fn read_generation(path: &Path) -> Result<Vec<u8>> {
 }
 
 impl Queue {
-    pub fn new(executable_dir: &Path) -> Result<Self> {
-        let root = executable_dir.join("reverb-queue");
+    pub fn for_user() -> Result<Self> {
+        let state_dir = dirs::state_dir()
+            .or_else(dirs::data_local_dir)
+            .context("resolving the user state directory")?;
+        Self::new(&state_dir.join("reverb"))
+    }
+
+    pub fn new(root: &Path) -> Result<Self> {
         let jobs = root.join("jobs");
         fs::create_dir_all(&jobs).with_context(|| format!("creating queue at {jobs:?}"))?;
-        Ok(Self { root, jobs })
+        Ok(Self {
+            root: root.to_owned(),
+            jobs,
+        })
     }
 
     fn lock_file(&self, name: &str) -> Result<File> {
@@ -78,20 +94,13 @@ impl Queue {
         Ok(())
     }
 
-    pub fn enqueue_and_drain(&self, text: &str, config: &Config, dir: &Path) -> Result<()> {
+    pub fn enqueue_and_drain(&self, text: &str, config: &Config) -> Result<()> {
         let state = self.state_lock()?;
-        self.enqueue(text)?;
+        self.enqueue(text, config)?;
         let worker = self.lock_file("drain.lock")?;
         match worker.try_lock() {
             Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                log(
-                    dir,
-                    "INFO",
-                    "speech job queued; another worker is already running",
-                );
-                return Ok(());
-            }
+            Err(TryLockError::WouldBlock) => return Ok(()),
             Err(error) => return Err(error).context("locking queue worker"),
         }
         drop(state);
@@ -109,19 +118,24 @@ impl Queue {
             fs::remove_file(&job).with_context(|| format!("claiming queued job {job:?}"))?;
             drop(state);
 
-            let text = text::normalize(&contents);
-            if text.is_empty() {
-                continue;
-            }
-            log_speech(dir, &text);
-            if let Err(error) = platform::speak(&text, config, &generation) {
-                log(dir, "ERROR", &format!("queued playback failed: {error:#}"));
+            let playback = if job.extension().is_some_and(|ext| ext == "txt") {
+                let text = text::normalize(&contents);
+                if text.is_empty() {
+                    continue;
+                }
+                platform::speak(&text, config, &generation)
+            } else {
+                serde_json::from_slice::<Job<String, Config>>(&contents)
+                    .with_context(|| format!("decoding queued job {job:?}"))
+                    .and_then(|job| platform::speak(&job.text, &job.config, &generation))
+            };
+            if let Err(error) = playback {
                 first_error.get_or_insert(error);
             }
         }
     }
 
-    fn enqueue(&self, text: &str) -> Result<()> {
+    fn enqueue(&self, text: &str, config: &Config) -> Result<()> {
         // New names sort after timestamp-based jobs from the Go implementation.
         let sequence = self
             .pending()?
@@ -137,8 +151,8 @@ impl Queue {
             .checked_add(1)
             .context("queue sequence exhausted")?;
         let mut job = NamedTempFile::new_in(&self.jobs)?;
-        job.write_all(text.as_bytes())?;
-        job.persist_noclobber(self.jobs.join(format!("job-{sequence:020}.txt")))
+        serde_json::to_writer(&mut job, &Job { text, config })?;
+        job.persist_noclobber(self.jobs.join(format!("job-{sequence:020}.json")))
             .context("publishing queued speech")?;
         Ok(())
     }
@@ -148,7 +162,10 @@ impl Queue {
         for entry in fs::read_dir(&self.jobs).context("reading speech queue")? {
             let entry = entry?;
             if entry.file_type()?.is_file()
-                && entry.path().extension().is_some_and(|ext| ext == "txt")
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "txt" || ext == "json")
             {
                 jobs.push(entry.path());
             }
@@ -168,14 +185,38 @@ mod tests {
         let queue = Queue::new(dir.path())?;
         let previous = queue.generation()?;
         fs::write(queue.jobs.join("20260101000000.000000000-42.txt"), "legacy")?;
-        queue.enqueue("first")?;
-        queue.enqueue("second")?;
+        let italian = Config {
+            voice: "Alice".into(),
+            rate: "620".into(),
+            ..Config::default()
+        };
+        let english = Config {
+            voice: "Samantha".into(),
+            rate: "450".into(),
+            ..Config::default()
+        };
+        queue.enqueue("first", &italian)?;
+        queue.enqueue("second", &english)?;
         let jobs = queue.pending()?;
-        let contents = jobs
-            .iter()
-            .map(fs::read_to_string)
-            .collect::<std::io::Result<Vec<_>>>()?;
-        assert_eq!(contents, ["legacy", "first", "second"]);
+        assert_eq!(fs::read_to_string(&jobs[0])?, "legacy");
+        let first: Job<String, Config> = serde_json::from_slice(&fs::read(&jobs[1])?)?;
+        let second: Job<String, Config> = serde_json::from_slice(&fs::read(&jobs[2])?)?;
+        assert_eq!(
+            (
+                first.text.as_str(),
+                first.config.voice.as_str(),
+                first.config.rate.as_str()
+            ),
+            ("first", "Alice", "620")
+        );
+        assert_eq!(
+            (
+                second.text.as_str(),
+                second.config.voice.as_str(),
+                second.config.rate.as_str()
+            ),
+            ("second", "Samantha", "450")
+        );
         queue.stop()?;
         assert!(queue.pending()?.is_empty());
         assert!(previous.cancelled()?);
