@@ -17,9 +17,9 @@ Current platform status:
 
 | Platform | Status                                                             |
 |----------|--------------------------------------------------------------------|
-| macOS    | Fully tested and daily-driven                                      |
-| Linux    | Supported, but current native TTS engines are not yet satisfactory |
-| Windows  | Implemented but not yet thoroughly tested                          |
+| macOS    | Primary development platform                                      |
+| Linux    | Speech Dispatcher, eSpeak NG and eSpeak |
+| Windows  | Windows PowerShell with System.Speech                          |
 
 ---
 
@@ -40,26 +40,50 @@ Current platform status:
 | Platform | Engine                                           |
 |----------|--------------------------------------------------|
 | macOS    | `say`                                            |
-| Linux    | `spd-say` or `espeak`                            |
+| Linux    | `spd-say`, `espeak-ng` or `espeak`                            |
 | Windows  | `System.Speech.SpeechSynthesizer` via PowerShell |
 
 ---
 
 ### Installation
 
+Download a prebuilt archive from the [GitHub Releases](https://github.com/amarilz/reverb/releases)
+page. Releases include macOS and Linux for x86-64 and ARM64, plus Windows x86-64.
+
 ##### From source
+
+Install Rust 1.89 or newer and Cargo.
 
 ```bash
 git clone https://github.com/amarilz/reverb
 cd reverb
-make install # installed into $(go env GOPATH)/bin
+cargo install --locked --path . --force # installs into ~/.cargo/bin by default
 ```
+
+On Linux, install a clipboard reader (`wl-clipboard`, `xclip` or `xsel`) and at
+least one speech engine. For Speech Dispatcher, install `spd-say` and make the
+dispatcher available through its normal user socket or `SPEECHD_ADDRESS`.
+On Windows, the app uses Windows PowerShell and the installed System.Speech voices.
+
+Build a local executable with `cargo build --release --locked`. The binary is in
+`target/release/`. Run `make release` to copy a build for the current platform
+into `dist/`. To build for another platform, use `make release-<rust-target>`;
+`make release-all` builds all five targets when their Rust targets, linkers and
+SDKs are configured.
+
+The root `VERSION` file sets the version printed by `reverb --version` and used
+for GitHub Releases. To publish a release, update `VERSION` (for example, to
+`1.1.1`). Push the version bump to `main` or run the
+Release workflow manually from `main`. GitHub Actions tests and packages each
+target, creates the corresponding `v<version>` tag, and publishes the archives
+with release notes generated from Conventional Commits. Published versions are
+skipped.
 
 ---
 
 ##### Configuration
 
-Generate a default config:
+The default configuration path is `config.json` in the current working directory. Existing JSON configurations work with the Rust release. Generate a default config:
 
 ```bash
 reverb --init-config
@@ -103,6 +127,7 @@ reverb [flags]
 | `--list-voices`   | Print available voices                  |
 | `--test`          | Speak the configured `test_text`        |
 | `--init-config`   | Generate a default config file          |
+| `--version`       | Print the version                       |
 | `--voice <name>`  | Override voice                          |
 | `--rate <value>`  | Override rate                           |
 | `--pitch <value>` | Override pitch                          |
@@ -120,7 +145,10 @@ Example:
 reverb --queue --skip-code --config config.json
 ```
 
-Speech requests are stored and consumed in FIFO order, ensuring that audio never overlaps.
+Queued requests are played one at a time in FIFO order, using the configuration
+of the invocation that drains the queue. Queue files and `reverb.log` live next
+to the executable. Leave that directory writable to use the queue and playback
+controls.
 
 ---
 
@@ -172,7 +200,4 @@ Typical workflow:
 reverb --stop
 ```
 
-This immediately:
-
-* stops the currently playing speech
-* clears the remaining FIFO queue
+This stops speech started by Reverb, including `--test` playback, and clears the remaining FIFO queue.
