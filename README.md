@@ -71,10 +71,9 @@ into `dist/`. To build for another platform, use `make release-<rust-target>`;
 `make release-all` builds all five targets when their Rust targets, linkers and
 SDKs are configured.
 
-The root `VERSION` file sets the version printed by `reverb --version` and used
-for GitHub Releases. Cargo displays the package version from `Cargo.toml`.
-To publish a release, set both to the same version and run `cargo check` to
-update `Cargo.lock`. Push the version bump to `main` or run the
+Edit the root `VERSION` file and run `make sync-version`. This updates the Cargo
+package version in `Cargo.toml` and `Cargo.lock`. Commit all three files so Cargo,
+`reverb --version` and GitHub Releases report the same version. Push to `main` or run the
 Release workflow manually from `main`. GitHub Actions tests and packages each
 target, creates the corresponding `v<version>` tag, and publishes the archives
 with release notes generated from Conventional Commits. Published versions are
