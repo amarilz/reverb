@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{fs, io::ErrorKind, path::Path};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Config {
     pub voice: String,
     pub rate: String,

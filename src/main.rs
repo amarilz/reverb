@@ -4,12 +4,9 @@ mod queue;
 mod text;
 
 use anyhow::{Context, Result, bail};
-use chrono::Local;
 use clap::Parser;
 use config::Config;
 use queue::Queue;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -17,8 +14,8 @@ use std::process::ExitCode;
 #[command(about = "Read clipboard text aloud", disable_version_flag = true)]
 struct Args {
     /// Path to the JSON configuration
-    #[arg(long, default_value = "config.json")]
-    config: PathBuf,
+    #[arg(long)]
+    config: Option<PathBuf>,
     /// Stop Reverb playback and clear the queue
     #[arg(long)]
     stop: bool,
@@ -55,22 +52,7 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let mut args = Args::parse();
-    if args.config.as_os_str().is_empty() {
-        args.config = "config.json".into();
-    }
-    let result = (|| -> Result<()> {
-        let executable = std::env::current_exe().context("resolving executable path")?;
-        let dir = executable
-            .parent()
-            .context("resolving executable directory")?;
-        if let Err(error) = run(args, dir) {
-            log(dir, "ERROR", &format!("{error:#}"));
-            return Err(error);
-        }
-        Ok(())
-    })();
-    if let Err(error) = result {
+    if let Err(error) = run(Args::parse()) {
         eprintln!("error: {error:#}");
         ExitCode::FAILURE
     } else {
@@ -78,17 +60,29 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(args: Args, dir: &Path) -> Result<()> {
+fn run(args: Args) -> Result<()> {
     if args.init_config {
-        Config::write_default(&args.config)?;
-        println!(
-            "Default configuration written to: {}",
-            args.config.display()
-        );
+        let path = args
+            .config
+            .as_deref()
+            .unwrap_or_else(|| Path::new("config.json"));
+        Config::write_default(path)?;
+        println!("Default configuration written to: {}", path.display());
         return Ok(());
     }
 
-    let mut config = Config::load(&args.config).context("loading configuration")?;
+    if args.stop {
+        return Queue::for_user()?.stop();
+    }
+    if args.version {
+        println!("{}", include_str!("../VERSION").trim());
+        return Ok(());
+    }
+
+    let mut config = match args.config {
+        Some(path) => Config::load(&path).context("loading configuration")?,
+        None => Config::default(),
+    };
     for (value, field) in [
         (args.voice, &mut config.voice),
         (args.rate, &mut config.rate),
@@ -101,21 +95,10 @@ fn run(args: Args, dir: &Path) -> Result<()> {
     }
 
     if args.list_voices {
-        log(dir, "INFO", "listing voices");
         return platform::list_voices(&config);
     }
-    if args.stop {
-        Queue::new(dir)?.stop()?;
-        log(dir, "INFO", "requested playback stop and cleared the queue");
-        return Ok(());
-    }
-    if args.version {
-        println!("{}", include_str!("../VERSION").trim());
-        return Ok(());
-    }
     if args.test {
-        log(dir, "INFO", "running TTS test");
-        let generation = Queue::new(dir)?.generation()?;
+        let generation = Queue::for_user()?.generation()?;
         return platform::speak(&config.test_text, &config, &generation);
     }
 
@@ -127,39 +110,11 @@ fn run(args: Args, dir: &Path) -> Result<()> {
         bail!("clipboard is empty or contains unreadable text");
     }
 
-    let queue = Queue::new(dir)?;
+    let queue = Queue::for_user()?;
     if args.queue {
-        queue.enqueue_and_drain(&text, &config, dir)
+        queue.enqueue_and_drain(&text, &config)
     } else {
         let generation = queue.generation()?;
-        log_speech(dir, &text);
         platform::speak(&text, &config, &generation)
-    }
-}
-
-fn log_speech(dir: &Path, text: &str) {
-    log(
-        dir,
-        "INFO",
-        &format!(
-            "speaking (chars: {}, words: {})",
-            text.len(),
-            text.split_whitespace().count()
-        ),
-    );
-}
-
-fn log(dir: &Path, level: &str, message: &str) {
-    let line = format!(
-        "[reverb] {} [{level}] {message}\n",
-        Local::now().format("%Y/%m/%d %H:%M:%S")
-    );
-    let _ = std::io::stdout().write_all(line.as_bytes());
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("reverb.log"))
-    {
-        let _ = file.write_all(line.as_bytes());
     }
 }
