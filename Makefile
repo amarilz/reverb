@@ -1,71 +1,51 @@
-BINARY      := reverb
-MODULE      := github.com/amarilz/reverb
-VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-BUILD_FLAGS := -trimpath -ldflags "-s -w -X reverb/internal/app.Version=$(VERSION)"
+BINARY := reverb
+HOST_TARGET := $(shell rustc -vV | sed -n 's/^host: //p')
 
-CMD := ./cmd/reverb
+TARGETS := x86_64-apple-darwin aarch64-apple-darwin \
+           x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc
+release_x86_64-apple-darwin := darwin-amd64
+release_aarch64-apple-darwin := darwin-arm64
+release_x86_64-unknown-linux-gnu := linux-amd64
+release_aarch64-unknown-linux-gnu := linux-arm64
+release_x86_64-pc-windows-msvc := windows-amd64.exe
 
-# ── Development ───────────────────────────────────────────────────────────────
-
-.PHONY: build
+.PHONY: build run test vet lint tidy install clean release release-all help
 build:
-	go build $(BUILD_FLAGS) -o $(BINARY) $(CMD)
+	cargo build --locked --release
 
-.PHONY: run
-run: build
-	./$(BINARY)
+run:
+	cargo run --locked --release
 
-.PHONY: test
 test:
-	go test ./... -race -count=1
+	cargo test --locked
 
-.PHONY: vet
 vet:
-	go vet ./...
+	cargo check --locked --all-targets
 
-.PHONY: lint
 lint:
-	golangci-lint run ./...
+	cargo fmt --all --check
+	cargo clippy --locked --all-targets -- -D warnings
 
-.PHONY: tidy
 tidy:
-	go mod tidy
+	cargo generate-lockfile
 
-# ── Install ───────────────────────────────────────────────────────────────────
-
-.PHONY: install
 install:
-	go install $(BUILD_FLAGS) $(CMD)
+	cargo install --locked --path . --force
 
-# ── Cross-platform release builds ─────────────────────────────────────────────
+release: release-$(HOST_TARGET)
 
-DIST := dist
+release-all: $(addprefix release-,$(TARGETS))
 
-.PHONY: release
-release: clean
-	mkdir -p $(DIST)
+.PHONY: $(addprefix release-,$(TARGETS))
+$(addprefix release-,$(TARGETS)): release-%:
+	cargo build --locked --release --target $*
+	mkdir -p dist
+	cp target/$*/release/$(BINARY)$(if $(findstring windows,$*),.exe) dist/$(BINARY)-$(release_$*)
 
-	GOOS=darwin  GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-darwin-amd64       $(CMD)
-	GOOS=darwin  GOARCH=arm64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-darwin-arm64       $(CMD)
-
-	GOOS=linux   GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-linux-amd64        $(CMD)
-	GOOS=linux   GOARCH=arm64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-linux-arm64        $(CMD)
-
-	GOOS=windows GOARCH=amd64  go build $(BUILD_FLAGS) -o $(DIST)/$(BINARY)-windows-amd64.exe  $(CMD)
-
-.PHONY: clean
 clean:
-	rm -rf $(BINARY) $(DIST)
+	cargo clean
+	rm -rf dist
 
-.PHONY: help
 help:
-	@echo "Targets:"
-	@echo "  build    — build for current platform"
-	@echo "  run      — build and run"
-	@echo "  test     — run tests with race detector"
-	@echo "  vet      — run go vet"
-	@echo "  lint     — run golangci-lint"
-	@echo "  tidy     — go mod tidy"
-	@echo "  install  — install to GOPATH/bin"
-	@echo "  release  — cross-compile for all targets into dist/"
-	@echo "  clean    — remove build artifacts"
+	@echo 'build run test vet lint tidy install clean'
+	@echo 'release (current platform), release-<rust-target>, release-all'
