@@ -93,7 +93,7 @@ pub fn speak(text: &str, config: &Config, generation: &Generation) -> Result<()>
             let mut command = Command::new("say");
             setting(&mut command, "-v", &config.voice);
             setting(&mut command, "-r", &config.rate);
-            command
+            return play(&mut command, &macos_speech_text(text), config, generation);
         }
         "windows" => {
             let mut command = powershell(
@@ -129,6 +129,15 @@ $synth.Speak([Console]::In.ReadToEnd())
         os => bail!("speech unsupported on {os}"),
     };
     play(&mut command, text, config, generation)
+}
+
+fn macos_speech_text(text: &str) -> std::borrow::Cow<'_, str> {
+    // An unescaped angle bracket can truncate speech in macOS say.
+    if text.contains(['<', '>']) {
+        text.replace('<', "‹").replace('>', "›").into()
+    } else {
+        text.into()
+    }
 }
 
 fn setting(command: &mut Command, flag: &str, value: &str) {
@@ -231,4 +240,19 @@ fn play(command: &mut Command, text: &str, config: &Config, generation: &Generat
         command.get_program(),
         stderr.trim()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::macos_speech_text;
+
+    #[test]
+    fn keeps_text_after_angle_brackets_for_macos_speech() {
+        assert_eq!(
+            macos_speech_text("Nel parser intercetterei <table> e continuerei a leggere."),
+            "Nel parser intercetterei ‹table› e continuerei a leggere."
+        );
+        assert_eq!(macos_speech_text("3 < 5, 7 > 6."), "3 ‹ 5, 7 › 6.");
+        assert_eq!(macos_speech_text("Testo normale."), "Testo normale.");
+    }
 }
